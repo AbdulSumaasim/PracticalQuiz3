@@ -244,8 +244,9 @@ const planets = [
   },
 ];
 
-// Moon orbital period: 27.32 days / 365.25 days * 60000ms ≈ 4488ms
-const MOON_PERIOD   = 4488;
+// Moon orbital period adjusted so one full orbit takes 14 visible seconds at 1× speed
+// (Real period: 27.32 days; scaled to 14 s for clear visual observability)
+const MOON_PERIOD   = 14000;
 const MOON_DISTANCE = 4;   // units from Earth centre
 
 let speedMultiplier = 1;
