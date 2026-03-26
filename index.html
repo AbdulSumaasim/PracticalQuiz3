@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Solar System – Milky Way</title>
+  <script src="script/aframe.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    #ui-overlay {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 32px;
+      padding: 8px 20px;
+      font-family: 'Segoe UI', sans-serif;
+      color: #fff;
+      font-size: 13px;
+      backdrop-filter: blur(6px);
+    }
+    #ui-overlay label { opacity: 0.75; }
+    #speed-slider { accent-color: #ffa500; width: 130px; }
+    #speed-val { min-width: 36px; text-align: center; color: #ffa500; font-weight: 700; }
+    #planet-info {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999;
+      background: rgba(0,0,0,0.65);
+      border: 1px solid rgba(255,200,80,0.3);
+      border-radius: 16px;
+      padding: 10px 24px;
+      font-family: 'Segoe UI', sans-serif;
+      color: #fff;
+      font-size: 14px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      text-align: center;
+    }
+    #planet-info.visible { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- Speed control UI -->
+<div id="ui-overlay">
+  <label>⏩ Speed</label>
+  <input id="speed-slider" type="range" min="0.1" max="10" step="0.1" value="1" />
+  <span id="speed-val">1×</span>
+</div>
+
+<!-- Planet name tooltip -->
+<div id="planet-info" id="planet-info"></div>
+
+<a-scene
+  background="color: #000010"
+  renderer="antialias: true; colorManagement: true"
+  fog="type: linear; color: #000; near: 200; far: 800"
+>
+  <!-- ====== ASSETS ====== -->
+  <a-assets timeout="60000">
+    <img id="tex-milkyway"         src="texture/2k_stars_milky_way.jpg" />
+    <img id="tex-stars"            src="texture/2k_stars.jpg" />
+    <img id="tex-sun"              src="texture/2k_sun.jpg" />
+    <img id="tex-mercury"          src="texture/2k_mercury.jpg" />
+    <img id="tex-venus-surface"    src="texture/2k_venus_surface.jpg" />
+    <img id="tex-venus-atmo"       src="texture/2k_venus_atmosphere.jpg" />
+    <img id="tex-earth"            src="texture/2k_earth_daymap.jpg" />
+    <img id="tex-moon"             src="texture/2k_moon.jpg" />
+    <img id="tex-mars"             src="texture/2k_mars.jpg" />
+    <img id="tex-jupiter"          src="texture/2k_jupiter.jpg" />
+    <img id="tex-saturn"           src="texture/2k_saturn.jpg" />
+    <img id="tex-saturn-ring"      src="texture/2k_saturn_ring_alpha.png" />
+    <img id="tex-uranus"           src="texture/2k_uranus.jpg" />
+    <img id="tex-neptune"          src="texture/2k_neptune.jpg" />
+  </a-assets>
+
+  <!-- ====== SKYBOX: Milky Way ====== -->
+  <a-sky src="#tex-milkyway" radius="500" rotation="0 0 0"></a-sky>
+
+  <!-- ====== AMBIENT + POINT LIGHT (from Sun) ====== -->
+  <!-- Ambient raised so unlit planet sides have visible fill, not pure black -->
+  <a-entity light="type: ambient; color: #334; intensity: 0.9"></a-entity>
+  <!-- Sun point light: higher intensity + lower decay so outer planets are well-lit -->
+  <a-entity light="type: point; color: #FFF8E7; intensity: 5; decay: 1.5; distance: 600" position="0 0 0"></a-entity>
+
+  <!-- ========================================================
+       SUN
+       Real sidereal rotation: 25.38 days (Carrington period)
+       Scaled: 25.38 / 365.25 * 60000 ms ≈ 4167 ms per full rotation
+  ======================================================== -->
+  <!-- Sun uses flat shader so texture always appears fully bright regardless of lighting -->
+  <a-sphere id="sun"
+    radius="6"
+    position="0 0 0"
+    material="src: #tex-sun; shader: flat">
+  </a-sphere>
+
+  <!-- Sun glow corona effect -->
+  <a-sphere radius="6.6" position="0 0 0"
+    material="color: #FF8C00; opacity: 0.18; transparent: true; shader: flat">
+  </a-sphere>
+  <a-sphere radius="7.5" position="0 0 0"
+    material="color: #FF6000; opacity: 0.09; transparent: true; shader: flat">
+  </a-sphere>
+  <a-sphere radius="8.4" position="0 0 0"
+    material="color: #FF4500; opacity: 0.04; transparent: true; shader: flat">
+  </a-sphere>
+
+  <!-- ========================================================
+       CAMERA RIG (free-look + WASD)
+  ======================================================== -->
+  <a-entity id="rig" position="0 8 80">
+    <a-camera look-controls wasd-controls="acceleration:25">
+      <a-cursor
+        fuse="false"
+        raycaster="objects: .planet-label"
+        color="#FFA500">
+      </a-cursor>
+    </a-camera>
+  </a-entity>
+
+</a-scene>
+
+<!-- ====== JavaScript: orbital mechanics + asteroid belt ====== -->
+<script>
+/*
+  ORBITAL PERIODS (real-life, scaled so Earth = 60 seconds)
+  Real periods (Earth years): Mercury 0.2408, Venus 0.6152, Earth 1,
+  Mars 1.881, Jupiter 11.86, Saturn 29.46, Uranus 84.01, Neptune 164.8
+  Moon (around Earth): 27.32 days ≈ 0.0748 years → 0.0748 × 60s ≈ 4.49s
+
+  Duration (ms) = (period / 1) × 60000
+*/
+const planets = [
+  {
+    id:      'mercury',
+    tex:     '#tex-mercury',
+    radius:  0.8,
+    orbit:   14,      // AU-ish distance from sun
+    period:  14449,   // 0.2408 * 60000 ms
+    tilt:    0.03,
+    selfRot: 5000,
+    color:   '#B5B5B5',
+    label:   'Mercury',
+    ring:    false,
+  },
+  {
+    id:      'venus',
+    tex:     '#tex-venus-surface',
+    radius:  1.5,
+    orbit:   22,
+    period:  36912,   // 0.6152 * 60000
+    tilt:    177.4,
+    selfRot: 12000,
+    color:   '#E8C97A',
+    label:   'Venus',
+    ring:    false,
+    atmo:    true,
+    atmoTex: '#tex-venus-atmo',
+  },
+  {
+    id:      'earth',
+    tex:     '#tex-earth',
+    radius:  1.6,
+    orbit:   32,
+    period:  60000,   // 1 Earth year = 60 s
+    tilt:    23.4,
+    selfRot: 2400,
+    color:   '#4BACC6',
+    label:   'Earth',
+    ring:    false,
+    moon:    true,
+  },
+  {
+    id:      'mars',
+    tex:     '#tex-mars',
+    radius:  1.1,
+    orbit:   44,
+    period:  112860,  // 1.881 * 60000
+    tilt:    25.2,
+    selfRot: 2500,
+    color:   '#C1440E',
+    label:   'Mars',
+    ring:    false,
+  },
+  {
+    id:      'jupiter',
+    tex:     '#tex-jupiter',
+    radius:  4.5,
+    orbit:   90,
+    period:  711600,  // 11.86 * 60000
+    tilt:    3.1,
+    selfRot: 800,
+    color:   '#C88B3A',
+    label:   'Jupiter',
+    ring:    false,
+  },
+  {
+    id:      'saturn',
+    tex:     '#tex-saturn',
+    radius:  3.8,
+    orbit:   130,
+    period:  1767600, // 29.46 * 60000
+    tilt:    26.7,
+    selfRot: 900,
+    color:   '#E4D191',
+    label:   'Saturn',
+    ring:    true,
+    ringTex: '#tex-saturn-ring',
+  },
+  {
+    id:      'uranus',
+    tex:     '#tex-uranus',
+    radius:  2.6,
+    orbit:   170,
+    period:  5040600, // 84.01 * 60000
+    tilt:    97.8,
+    selfRot: 1400,
+    color:   '#7DE8E8',
+    label:   'Uranus',
+    ring:    false,
+  },
+  {
+    id:      'neptune',
+    tex:     '#tex-neptune',
+    radius:  2.5,
+    orbit:   210,
+    period:  9888000, // 164.8 * 60000
+    tilt:    28.3,
+    selfRot: 1500,
+    color:   '#3F54BA',
+    label:   'Neptune',
+    ring:    false,
+  },
+];
+
+// Moon orbital period: 27.32 days / 365.25 days * 60000ms ≈ 4488ms
+const MOON_PERIOD   = 4488;
+const MOON_DISTANCE = 4;   // units from Earth centre
+
+let speedMultiplier = 1;
+
+// ---- Speed slider ----
+const slider  = document.getElementById('speed-slider');
+const speedEl = document.getElementById('speed-val');
+slider.addEventListener('input', () => {
+  speedMultiplier = parseFloat(slider.value);
+  speedEl.textContent = speedMultiplier.toFixed(1) + '×';
+});
+
+// ---- Orbit ring helper ----
+function makeOrbitRing(scene, radius) {
+  const ring = document.createElement('a-torus');
+  ring.setAttribute('radius', radius);
+  ring.setAttribute('radius-tubular', 0.04);
+  ring.setAttribute('segments-tubular', 60);
+  ring.setAttribute('segments-radial', 60);
+  ring.setAttribute('material', 'color: #aaaaaa; opacity: 0.13; transparent: true; shader: flat');
+  ring.setAttribute('rotation', '90 0 0');
+  scene.appendChild(ring);
+}
+
+// ---- Build planets ----
+function buildSolarSystem() {
+  const scene = document.querySelector('a-scene');
+
+  planets.forEach(p => {
+    // orbit ring
+    makeOrbitRing(scene, p.orbit);
+
+    // Pivot entity for orbital revolution
+    const pivot = document.createElement('a-entity');
+    pivot.setAttribute('id', 'pivot-' + p.id);
+    pivot.setAttribute('position', '0 0 0');
+
+    // planet sphere
+    const sphere = document.createElement('a-sphere');
+    sphere.setAttribute('id', p.id);
+    sphere.setAttribute('class', 'planet-label');
+    sphere.setAttribute('radius', p.radius);
+    sphere.setAttribute('segments-height', 36);
+    sphere.setAttribute('segments-width', 36);
+    sphere.setAttribute('position', `${p.orbit} 0 0`);
+    sphere.setAttribute('rotation', `${p.tilt} 0 0`);
+    sphere.setAttribute('material', `src: ${p.tex}; shader: standard; metalness: 0; roughness: 0.85`);
+    sphere.setAttribute('data-label', p.label);
+
+    pivot.appendChild(sphere);
+
+    // Venus atmosphere overlay
+    if (p.atmo) {
+      const atmo = document.createElement('a-sphere');
+      atmo.setAttribute('radius', p.radius + 0.04);
+      atmo.setAttribute('position', `${p.orbit} 0 0`);
+      atmo.setAttribute('material', `src: ${p.atmoTex}; opacity: 0.35; transparent: true; shader: flat; side: back`);
+      pivot.appendChild(atmo);
+    }
+
+    // Saturn ring
+    if (p.ring) {
+      // Saturn ring: use a-ring for a proper flat disc
+      const ringEl = document.createElement('a-ring');
+      ringEl.setAttribute('radius-inner', p.radius * 1.35);
+      ringEl.setAttribute('radius-outer', p.radius * 2.55);
+      ringEl.setAttribute('segments-theta', 80);
+      ringEl.setAttribute('position', `${p.orbit} 0 0`);
+      // Tilt the ring to match Saturn's axial inclination
+      ringEl.setAttribute('rotation', `${90 - p.tilt} 0 0`);
+      ringEl.setAttribute('material', `src: ${p.ringTex}; transparent: true; opacity: 0.9; side: double; shader: flat`);
+      pivot.appendChild(ringEl);
+    }
+
+    // Moon (Earth only)
+    if (p.moon) {
+      const moonPivot = document.createElement('a-entity');
+      moonPivot.setAttribute('id', 'moon-pivot');
+      moonPivot.setAttribute('position', `${p.orbit} 0 0`);
+
+      const moon = document.createElement('a-sphere');
+      moon.setAttribute('id', 'moon');
+      moon.setAttribute('radius', 0.44);
+      moon.setAttribute('segments-height', 24);
+      moon.setAttribute('segments-width', 24);
+      moon.setAttribute('position', `${MOON_DISTANCE} 0 0`);
+      // emissive fill so dark side stays slightly visible, not pure black
+      moon.setAttribute('material', 'src: #tex-moon; shader: standard; roughness: 0.9; emissive: #223; emissiveIntensity: 0.25');
+      moonPivot.appendChild(moon);
+
+      // Moon orbit ring
+      const moonRing = document.createElement('a-torus');
+      moonRing.setAttribute('radius', MOON_DISTANCE);
+      moonRing.setAttribute('radius-tubular', 0.02);
+      moonRing.setAttribute('segments-tubular', 80);
+      moonRing.setAttribute('material', 'color: #888; opacity: 0.2; transparent: true; shader: flat');
+      moonRing.setAttribute('rotation', '90 0 0');
+      moonPivot.appendChild(moonRing);
+
+      pivot.appendChild(moonPivot);
+    }
+
+    scene.appendChild(pivot);
+  });
+
+  // ---- Asteroid belt (Mars–Jupiter gap: orbits 44–90, use 50–75) ----
+  buildAsteroidBelt(scene, 50, 78, 120);
+}
+
+// ---- Asteroid belt ----
+function buildAsteroidBelt(scene, innerR, outerR, count) {
+  for (let i = 0; i < count; i++) {
+    const angle  = Math.random() * Math.PI * 2;
+    const dist   = innerR + Math.random() * (outerR - innerR);
+    const x      = Math.cos(angle) * dist;
+    const z      = Math.sin(angle) * dist;
+    const y      = (Math.random() - 0.5) * 3.5;
+    const size   = 0.06 + Math.random() * 0.3;
+    const grey   = Math.floor(100 + Math.random() * 80);
+    const color  = `rgb(${grey},${grey-10},${grey-20})`;
+
+    const ast = document.createElement('a-sphere');
+    ast.setAttribute('radius', size);
+    ast.setAttribute('position', `${x} ${y} ${z}`);
+    ast.setAttribute('segments-height', 5);
+    ast.setAttribute('segments-width', 5);
+    ast.setAttribute('material', `color: ${color}; roughness: 0.95; metalness: 0.1; shader: standard`);
+    // Slow individual spin
+    ast.setAttribute('animation', `property: rotation; to: ${Math.random()*360} ${Math.random()*360} ${Math.random()*360}; dur: ${6000 + Math.random()*12000}; loop: true; easing: linear`);
+    scene.appendChild(ast);
+  }
+}
+
+// ======================================================
+// ANIMATION LOOP — manual orbital revolution
+// Uses requestAnimationFrame so speedMultiplier is live
+// ======================================================
+const orbitAngles   = {};
+const selfRotAngles = {};
+let moonAngle       = 0;
+let lastTime        = null;
+let earthOrbit      = null; // used for moon pivot position
+
+// Sun self-rotation: 25.38-day Carrington sidereal period
+// Scaled to simulation: (25.38 / 365.25) * 60000 ms ≈ 4167 ms per full rotation
+const SUN_SELF_ROT_MS = 4167;
+let sunRotAngle = 0;
+
+planets.forEach(p => {
+  orbitAngles[p.id]   = Math.random() * 360;  // stagger start
+  selfRotAngles[p.id] = 0;
+});
+
+function tick(now) {
+  if (!lastTime) lastTime = now;
+  const dtMs = (now - lastTime) * speedMultiplier;
+  lastTime = now;
+
+  // Sun self-rotation (7.25° axial tilt relative to ecliptic)
+  sunRotAngle += (360 / SUN_SELF_ROT_MS) * dtMs;
+  const sunEl = document.getElementById('sun');
+  if (sunEl) sunEl.setAttribute('rotation', `7.25 ${sunRotAngle} 0`);
+
+  planets.forEach(p => {
+    // orbital revolution
+    const orbitDeg  = (360 / p.period) * dtMs;
+    orbitAngles[p.id] += orbitDeg;
+
+    const pivot = document.getElementById('pivot-' + p.id);
+    if (pivot) pivot.setAttribute('rotation', `0 ${orbitAngles[p.id]} 0`);
+
+    // self rotation
+    const selfDeg = (360 / p.selfRot) * dtMs;
+    selfRotAngles[p.id] += selfDeg;
+    const sphere = document.getElementById(p.id);
+    if (sphere) sphere.setAttribute('rotation', `${p.tilt} ${selfRotAngles[p.id]} 0`);
+  });
+
+  // Moon orbit around Earth
+  const moonDeg   = (360 / MOON_PERIOD) * dtMs;
+  moonAngle      += moonDeg;
+  const moonPivot = document.getElementById('moon-pivot');
+  if (moonPivot) {
+    moonPivot.setAttribute('rotation', `0 ${moonAngle} 0`);
+  }
+
+  requestAnimationFrame(tick);
+}
+
+// Start everything once scene is loaded
+document.querySelector('a-scene').addEventListener('loaded', () => {
+  buildSolarSystem();
+  requestAnimationFrame(tick);
+});
+
+// ---- Planet name tooltip ----
+const infoEl = document.getElementById('planet-info');
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-label]') || document.querySelector('[data-label]:hover');
+  if (el) {
+    infoEl.textContent = el.getAttribute('data-label');
+    infoEl.classList.add('visible');
+    setTimeout(() => infoEl.classList.remove('visible'), 2500);
+  }
+});
+</script>
+</body>
+</html>
